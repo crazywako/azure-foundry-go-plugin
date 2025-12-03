@@ -188,6 +188,24 @@ func (a *AzureAIFoundry) generateText(ctx context.Context, modelName string, inp
 	return a.generateTextSync(ctx, params, input)
 }
 
+// hasMultimodalContent checks if a message contains multimodal content (text + images)
+func (a *AzureAIFoundry) hasMultimodalContent(msg *ai.Message) bool {
+	hasText := false
+	hasMedia := false
+
+	for _, part := range msg.Content {
+		if part.IsText() {
+			hasText = true
+		}
+		if part.IsMedia() {
+			hasMedia = true
+		}
+	}
+
+	// Return true if it has media, or if it has multiple parts (regardless of media)
+	return hasMedia || (hasText && len(msg.Content) > 1)
+}
+
 // convertMessagesToOpenAI converts Genkit messages to OpenAI message format
 func (a *AzureAIFoundry) convertMessagesToOpenAI(messages []*ai.Message) []openai.ChatCompletionMessageParamUnion {
 	var openAIMessages []openai.ChatCompletionMessageParamUnion
@@ -207,13 +225,48 @@ func (a *AzureAIFoundry) convertMessagesToOpenAI(messages []*ai.Message) []opena
 				},
 			})
 		case ai.RoleUser:
-			openAIMessages = append(openAIMessages, openai.ChatCompletionMessageParamUnion{
-				OfUser: &openai.ChatCompletionUserMessageParam{
-					Content: openai.ChatCompletionUserMessageParamContentUnion{
-						OfString: openai.String(msg.Content[0].Text),
+			// Check if message contains multimodal content (text + images)
+			if a.hasMultimodalContent(msg) {
+				// Handle multimodal content with array of content parts
+				var contentParts []openai.ChatCompletionContentPartUnionParam
+
+				for _, part := range msg.Content {
+					if part.IsText() {
+						contentParts = append(contentParts, openai.ChatCompletionContentPartUnionParam{
+							OfText: &openai.ChatCompletionContentPartTextParam{
+								Text: part.Text,
+							},
+						})
+					} else if part.IsMedia() {
+						// Handle image/media content
+						// Media parts store the URL in the Text field
+						contentParts = append(contentParts, openai.ChatCompletionContentPartUnionParam{
+							OfImageURL: &openai.ChatCompletionContentPartImageParam{
+								ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+									URL: part.Text,
+								},
+							},
+						})
+					}
+				}
+
+				openAIMessages = append(openAIMessages, openai.ChatCompletionMessageParamUnion{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Content: openai.ChatCompletionUserMessageParamContentUnion{
+							OfArrayOfContentParts: contentParts,
+						},
 					},
-				},
-			})
+				})
+			} else {
+				// Simple text-only message
+				openAIMessages = append(openAIMessages, openai.ChatCompletionMessageParamUnion{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Content: openai.ChatCompletionUserMessageParamContentUnion{
+							OfString: openai.String(msg.Content[0].Text),
+						},
+					},
+				})
+			}
 		case ai.RoleModel:
 			// Extract all content parts and tool requests
 			var textContent string

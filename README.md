@@ -392,6 +392,7 @@ The repository includes comprehensive examples:
 - **`examples/chat/`** - Multi-turn conversation with context
 - **`examples/embeddings/`** - Text embeddings generation
 - **`examples/tool_calling/`** - Function calling with multiple tools
+- **`examples/vision/`** - Multimodal image analysis
 
 ### Running Examples
 
@@ -414,6 +415,10 @@ go run main.go
 
 # Run tool calling example
 cd ../tool_calling
+go run main.go
+
+# Run vision example
+cd ../vision
 go run main.go
 ```
 
