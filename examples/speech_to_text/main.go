@@ -58,7 +58,11 @@ func main() {
 		log.Println("Please run the text_to_speech example first or provide your own audio file.")
 		return
 	}
-	defer audio.Close()
+	defer func() {
+		if closeErr := audio.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close audio file: %v", closeErr)
+		}
+	}()
 
 	audioBytes, err := io.ReadAll(audio)
 	if err != nil {

@@ -293,7 +293,9 @@ func (a *AzureAIFoundry) generateSpeechInternal(ctx context.Context, modelName s
 
 	// Read all audio data from the response body
 	audioData, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		return nil, fmt.Errorf("failed to close response body: %w", closeErr)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read audio data: %w", err)
 	}
