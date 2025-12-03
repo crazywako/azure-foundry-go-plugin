@@ -21,9 +21,9 @@ func main() {
 
 	// Define a GPT-5 model with vision support
 	gpt5Model := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
-		Name:           "gpt-5", // Your deployment name in Azure
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-5", // Your deployment name in Azure
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	log.Println("Starting Vision (Multimodal) example...")

@@ -20,9 +20,12 @@
 package azureaifoundry
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -38,6 +41,17 @@ import (
 
 const provider = "azureaifoundry"
 
+// fileReader wraps a bytes.Reader to provide a filename for multipart uploads
+type fileReader struct {
+	*bytes.Reader
+	name string
+}
+
+// Name returns the filename for multipart form uploads
+func (f *fileReader) Name() string {
+	return f.name
+}
+
 // AzureAIFoundry provides configuration options for the Azure AI Foundry plugin.
 type AzureAIFoundry struct {
 	Endpoint   string                 // Azure AI Foundry endpoint URL (required)
@@ -52,10 +66,10 @@ type AzureAIFoundry struct {
 
 // ModelDefinition represents a model with its name and type.
 type ModelDefinition struct {
-	Name           string // Model deployment name in Azure AI Foundry
-	Type           string // Type: "chat", "text"
-	MaxTokens      int32  // Maximum tokens the model can handle (optional)
-	SupportsVision bool   // Whether the model supports vision/images (optional)
+	Name          string // Model deployment name in Azure AI Foundry
+	Type          string // Type: "chat", "text"
+	MaxTokens     int32  // Maximum tokens the model can handle (optional)
+	SupportsMedia bool   // Whether the model supports media (images, audio) (optional)
 }
 
 // Name returns the provider name.
@@ -77,17 +91,17 @@ func (a *AzureAIFoundry) Init(ctx context.Context) []api.Action {
 		panic("azureaifoundry: Endpoint is required")
 	}
 
-	// Create client options
-	var opts []option.RequestOption
-	// Construct base URL by appending /openai/v1 to the endpoint
-	endpoint := strings.TrimSuffix(a.Endpoint, "/")
-	baseURL := fmt.Sprintf("%s/openai/v1", endpoint)
-	opts = append(opts, option.WithBaseURL(baseURL))
-
-	// Set API version (default to latest if not specified)
-	if a.APIVersion != "" {
-		opts = append(opts, option.WithQueryAdd("api-version", a.APIVersion))
+	// Set default API version if not specified
+	apiVersion := a.APIVersion
+	if apiVersion == "" {
+		apiVersion = "2025-03-01-preview"
 	}
+
+	// Create client options using Azure-specific configuration
+	var opts []option.RequestOption
+
+	// Use azure.WithEndpoint which properly handles Azure OpenAI deployment-based URLs
+	opts = append(opts, azure.WithEndpoint(a.Endpoint, apiVersion))
 
 	if a.APIKey != "" {
 		// Use API key authentication
@@ -121,7 +135,7 @@ func (a *AzureAIFoundry) DefineModel(g *genkit.Genkit, model ModelDefinition, in
 
 	// Auto-detect model capabilities if not provided
 	if info == nil {
-		info = a.inferModelCapabilities(model.Name, model.Type, model.SupportsVision)
+		info = a.inferModelCapabilities(model.Name, model.SupportsMedia)
 	}
 
 	// Create model metadata
@@ -158,26 +172,245 @@ func (a *AzureAIFoundry) DefineEmbedder(g *genkit.Genkit, modelName string) ai.E
 	})
 }
 
-// inferModelCapabilities infers model capabilities based on model info.
-func (a *AzureAIFoundry) inferModelCapabilities(modelName, modelType string, supportsVision bool) *ai.ModelInfo {
-	// Detect tool support based on model name
-	supportsTools := strings.Contains(strings.ToLower(modelName), "gpt-4") ||
-		strings.Contains(strings.ToLower(modelName), "gpt-35-turbo") ||
-		strings.Contains(strings.ToLower(modelName), "gpt-3.5-turbo")
+// ImageGenerationRequest represents a request to generate images
+type ImageGenerationRequest struct {
+	Prompt         string // The text prompt to generate images from
+	N              int    // Number of images to generate (1-10)
+	Size           string // Size: "256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"
+	Quality        string // Quality: "standard" or "hd" (DALL-E 3 only)
+	Style          string // Style: "vivid" or "natural" (DALL-E 3 only)
+	ResponseFormat string // Format: "url" or "b64_json"
+}
 
+// ImageGenerationResponse represents the response from image generation
+type ImageGenerationResponse struct {
+	Images        []GeneratedImage // Generated images
+	RevisedPrompt string           // The revised prompt used (DALL-E 3)
+}
+
+// GeneratedImage represents a generated image
+type GeneratedImage struct {
+	URL           string // URL of the generated image (if response_format=url)
+	B64JSON       string // Base64-encoded image data (if response_format=b64_json)
+	RevisedPrompt string // The revised prompt used for this image
+}
+
+// generateImagesInternal generates images using DALL-E models
+func (a *AzureAIFoundry) generateImagesInternal(ctx context.Context, modelName string, req *ImageGenerationRequest) (*ImageGenerationResponse, error) {
+	a.mu.Lock()
+	if !a.initted {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("azureaifoundry: client not initialized")
+	}
+	client := a.client
+	a.mu.Unlock()
+
+	// Build image generation parameters
+	params := openai.ImageGenerateParams{
+		Prompt: req.Prompt,
+		Model:  openai.ImageModel(modelName),
+	}
+
+	if req.N > 0 {
+		params.N = openai.Int(int64(req.N))
+	}
+	if req.Size != "" {
+		params.Size = openai.ImageGenerateParamsSize(req.Size)
+	}
+	if req.Quality != "" {
+		params.Quality = openai.ImageGenerateParamsQuality(req.Quality)
+	}
+	if req.Style != "" {
+		params.Style = openai.ImageGenerateParamsStyle(req.Style)
+	}
+	if req.ResponseFormat != "" {
+		params.ResponseFormat = openai.ImageGenerateParamsResponseFormat(req.ResponseFormat)
+	}
+
+	// Generate images
+	resp, err := client.Images.Generate(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("image generation failed: %w", err)
+	}
+
+	// Convert response
+	var images []GeneratedImage
+	for _, img := range resp.Data {
+		images = append(images, GeneratedImage{
+			URL:           img.URL,
+			B64JSON:       img.B64JSON,
+			RevisedPrompt: img.RevisedPrompt,
+		})
+	}
+
+	return &ImageGenerationResponse{
+		Images: images,
+	}, nil
+}
+
+// TTSRequest represents a text-to-speech request
+type TTSRequest struct {
+	Input          string  // The text to synthesize
+	Voice          string  // Voice: "alloy", "echo", "fable", "onyx", "nova", "shimmer"
+	ResponseFormat string  // Format: "mp3", "opus", "aac", "flac", "wav", "pcm"
+	Speed          float64 // Speed (0.25 to 4.0)
+}
+
+// TTSResponse represents the text-to-speech response
+type TTSResponse struct {
+	Audio []byte // The audio data
+}
+
+// generateSpeechInternal converts text to speech using TTS models
+func (a *AzureAIFoundry) generateSpeechInternal(ctx context.Context, modelName string, req *TTSRequest) (*TTSResponse, error) {
+	a.mu.Lock()
+	if !a.initted {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("azureaifoundry: client not initialized")
+	}
+	client := a.client
+	a.mu.Unlock()
+
+	// Build TTS parameters
+	params := openai.AudioSpeechNewParams{
+		Model: openai.SpeechModel(modelName),
+		Input: req.Input,
+		Voice: openai.AudioSpeechNewParamsVoice(req.Voice),
+	}
+
+	if req.ResponseFormat != "" {
+		params.ResponseFormat = openai.AudioSpeechNewParamsResponseFormat(req.ResponseFormat)
+	}
+	if req.Speed > 0 {
+		params.Speed = openai.Float(req.Speed)
+	}
+
+	// Generate speech
+	resp, err := client.Audio.Speech.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("speech generation failed: %w", err)
+	}
+
+	// Read all audio data from the response body
+	audioData, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read audio data: %w", err)
+	}
+
+	return &TTSResponse{
+		Audio: audioData,
+	}, nil
+}
+
+// STTRequest represents a speech-to-text request
+type STTRequest struct {
+	Audio          []byte  // The audio file content
+	Filename       string  // Filename with extension (e.g., "audio.mp3", "audio.wav") - required for format detection
+	Language       string  // Language code (e.g., "en", "es")
+	Prompt         string  // Optional text to guide the model's style
+	ResponseFormat string  // Format: "json", "text", "srt", "verbose_json", "vtt"
+	Temperature    float64 // Temperature (0 to 1)
+}
+
+// STTResponse represents the speech-to-text response
+type STTResponse struct {
+	Text     string  // Transcribed text
+	Language string  // Detected language
+	Duration float64 // Duration in seconds
+}
+
+// transcribeAudioInternal transcribes audio to text using Whisper models
+func (a *AzureAIFoundry) transcribeAudioInternal(ctx context.Context, modelName string, req *STTRequest) (*STTResponse, error) {
+	a.mu.Lock()
+	if !a.initted {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("azureaifoundry: client not initialized")
+	}
+	client := a.client
+	a.mu.Unlock()
+
+	// Determine filename - use provided filename or default based on format
+	filename := req.Filename
+	if filename == "" {
+		filename = "audio.mp3" // Default to mp3 if not specified
+	}
+
+	// Create a named reader for the file upload
+	// The openai SDK expects an io.Reader, and the filename is inferred from the field name
+	// We need to use a file-like reader that can provide metadata
+	file := &fileReader{
+		Reader: bytes.NewReader(req.Audio),
+		name:   filename,
+	}
+
+	// Build transcription parameters
+	params := openai.AudioTranscriptionNewParams{
+		Model: openai.AudioModel(modelName),
+		File:  file,
+	}
+
+	if req.Language != "" {
+		params.Language = openai.String(req.Language)
+	}
+	if req.Prompt != "" {
+		params.Prompt = openai.String(req.Prompt)
+	}
+	if req.ResponseFormat != "" {
+		params.ResponseFormat = openai.AudioResponseFormat(req.ResponseFormat)
+	}
+	if req.Temperature > 0 {
+		params.Temperature = openai.Float(req.Temperature)
+	}
+
+	// Transcribe audio
+	resp, err := client.Audio.Transcriptions.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("audio transcription failed: %w", err)
+	}
+
+	return &STTResponse{
+		Text:     resp.Text,
+		Language: resp.Language,
+		Duration: resp.Duration,
+	}, nil
+}
+
+// inferModelCapabilities infers model capabilities based on model info.
+func (a *AzureAIFoundry) inferModelCapabilities(modelName string, supportsMedia bool) *ai.ModelInfo {
+	// Detect tool support based on model name
+	supportsTools := strings.Contains(strings.ToLower(modelName), "gpt")
 	return &ai.ModelInfo{
 		Label: modelName,
 		Supports: &ai.ModelSupports{
 			Multiturn:  true,
 			Tools:      supportsTools,
 			SystemRole: true,
-			Media:      supportsVision,
+			Media:      supportsMedia,
 		},
 	}
 }
 
 // generateText handles text generation using Azure OpenAI
 func (a *AzureAIFoundry) generateText(ctx context.Context, modelName string, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+	modelLower := strings.ToLower(modelName)
+
+	// Handle image generation models (DALL-E)
+	if strings.Contains(modelLower, "dall-e") || strings.Contains(modelLower, "gpt-image") {
+		return a.generateImages(ctx, modelName, input)
+	}
+
+	// Handle text-to-speech models
+	if strings.Contains(modelLower, "tts-") || strings.Contains(modelLower, "tts") {
+		return a.generateSpeech(ctx, modelName, input)
+	}
+
+	// Handle speech-to-text models (Whisper, transcribe)
+	if strings.Contains(modelLower, "whisper") || strings.Contains(modelLower, "transcribe") {
+		return a.transcribeAudioFromRequest(ctx, modelName, input)
+	}
+
+	// Default: standard chat completion
 	// Build chat completion parameters
 	params := a.buildChatCompletionParams(input, modelName)
 
@@ -186,6 +419,206 @@ func (a *AzureAIFoundry) generateText(ctx context.Context, modelName string, inp
 		return a.generateTextStream(ctx, params, input, cb)
 	}
 	return a.generateTextSync(ctx, params, input)
+}
+
+// generateImages handles image generation through Genkit's Generate interface
+func (a *AzureAIFoundry) generateImages(ctx context.Context, modelName string, input *ai.ModelRequest) (*ai.ModelResponse, error) {
+	// Extract prompt from messages
+	var prompt string
+	for _, msg := range input.Messages {
+		for _, part := range msg.Content {
+			if part.IsText() {
+				prompt += part.Text
+			}
+		}
+	}
+
+	// Extract config if provided
+	req := &ImageGenerationRequest{
+		Prompt:         prompt,
+		N:              1,
+		Size:           "1024x1024",
+		Quality:        "standard",
+		Style:          "vivid",
+		ResponseFormat: "url",
+	}
+
+	// Apply config from input if available
+	if input.Config != nil {
+		if configMap, ok := input.Config.(map[string]interface{}); ok {
+			if n, ok := configMap["n"].(int); ok {
+				req.N = n
+			}
+			if size, ok := configMap["size"].(string); ok {
+				req.Size = size
+			}
+			if quality, ok := configMap["quality"].(string); ok {
+				req.Quality = quality
+			}
+			if style, ok := configMap["style"].(string); ok {
+				req.Style = style
+			}
+			if format, ok := configMap["response_format"].(string); ok {
+				req.ResponseFormat = format
+			}
+		}
+	}
+
+	// Generate images
+	resp, err := a.generateImagesInternal(ctx, modelName, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to ModelResponse
+	var content []*ai.Part
+	for _, img := range resp.Images {
+		if img.URL != "" {
+			content = append(content, ai.NewTextPart(img.URL))
+		} else if img.B64JSON != "" {
+			content = append(content, ai.NewTextPart(img.B64JSON))
+		}
+	}
+
+	return &ai.ModelResponse{
+		Message: &ai.Message{
+			Role:    ai.RoleModel,
+			Content: content,
+		},
+		FinishReason: ai.FinishReasonStop,
+	}, nil
+}
+
+// generateSpeech handles text-to-speech through Genkit's Generate interface
+func (a *AzureAIFoundry) generateSpeech(ctx context.Context, modelName string, input *ai.ModelRequest) (*ai.ModelResponse, error) {
+	// Extract text from messages
+	var text string
+	for _, msg := range input.Messages {
+		for _, part := range msg.Content {
+			if part.IsText() {
+				text += part.Text
+			}
+		}
+	}
+
+	// Extract config if provided
+	req := &TTSRequest{
+		Input:          text,
+		Voice:          "alloy",
+		ResponseFormat: "mp3",
+		Speed:          1.0,
+	}
+
+	// Apply config from input if available
+	if input.Config != nil {
+		if configMap, ok := input.Config.(map[string]interface{}); ok {
+			if voice, ok := configMap["voice"].(string); ok {
+				req.Voice = voice
+			}
+			if format, ok := configMap["response_format"].(string); ok {
+				req.ResponseFormat = format
+			}
+			if speed, ok := configMap["speed"].(float64); ok {
+				req.Speed = speed
+			}
+		}
+	}
+
+	// Generate speech
+	resp, err := a.generateSpeechInternal(ctx, modelName, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return audio as base64-encoded text (following Genkit pattern)
+	audioBase64 := base64.StdEncoding.EncodeToString(resp.Audio)
+
+	return &ai.ModelResponse{
+		Message: &ai.Message{
+			Role:    ai.RoleModel,
+			Content: []*ai.Part{ai.NewTextPart(audioBase64)},
+		},
+		FinishReason: ai.FinishReasonStop,
+	}, nil
+}
+
+// transcribeAudioFromRequest handles speech-to-text through Genkit's Generate interface
+func (a *AzureAIFoundry) transcribeAudioFromRequest(ctx context.Context, modelName string, input *ai.ModelRequest) (*ai.ModelResponse, error) {
+	// Extract audio from media parts
+	var audioData []byte
+	var filename string
+
+	for _, msg := range input.Messages {
+		for _, part := range msg.Content {
+			if part.IsMedia() {
+				// Media part contains base64-encoded audio
+				// Format: "data:audio/wav;base64,..."
+				mediaText := part.Text
+				if idx := strings.Index(mediaText, "base64,"); idx != -1 {
+					b64Data := mediaText[idx+7:]
+					var err error
+					audioData, err = base64.StdEncoding.DecodeString(b64Data)
+					if err != nil {
+						return nil, fmt.Errorf("failed to decode audio: %w", err)
+					}
+
+					// Extract format from media type
+					if strings.Contains(mediaText, "audio/mp3") || strings.Contains(mediaText, "audio/mpeg") {
+						filename = "audio.mp3"
+					} else if strings.Contains(mediaText, "audio/wav") {
+						filename = "audio.wav"
+					} else if strings.Contains(mediaText, "audio/opus") {
+						filename = "audio.opus"
+					} else {
+						filename = "audio.mp3" // default
+					}
+				}
+			}
+		}
+	}
+
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("no audio data found in request")
+	}
+
+	// Extract config if provided
+	req := &STTRequest{
+		Audio:          audioData,
+		Filename:       filename,
+		ResponseFormat: "json",
+	}
+
+	// Apply config from input if available
+	if input.Config != nil {
+		if configMap, ok := input.Config.(map[string]interface{}); ok {
+			if lang, ok := configMap["language"].(string); ok {
+				req.Language = lang
+			}
+			if prompt, ok := configMap["prompt"].(string); ok {
+				req.Prompt = prompt
+			}
+			if format, ok := configMap["response_format"].(string); ok {
+				req.ResponseFormat = format
+			}
+			if temp, ok := configMap["temperature"].(float64); ok {
+				req.Temperature = temp
+			}
+		}
+	}
+
+	// Transcribe audio
+	resp, err := a.transcribeAudioInternal(ctx, modelName, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ai.ModelResponse{
+		Message: &ai.Message{
+			Role:    ai.RoleModel,
+			Content: []*ai.Part{ai.NewTextPart(resp.Text)},
+		},
+		FinishReason: ai.FinishReasonStop,
+	}, nil
 }
 
 // hasMultimodalContent checks if a message contains multimodal content (text + images)
@@ -680,36 +1113,36 @@ func DefineCommonModels(a *AzureAIFoundry, g *genkit.Genkit) map[string]ai.Model
 	models := make(map[string]ai.Model)
 	//GPT-5 models
 	models["gpt-5"] = a.DefineModel(g, ModelDefinition{
-		Name:           "gpt-5",
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-5",
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	// GPT-5 Mini models
 	models["gpt-5-mini"] = a.DefineModel(g, ModelDefinition{
-		Name:           "gpt-5-mini",
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-5-mini",
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	// GPT-4o models
 	models["gpt-4o"] = a.DefineModel(g, ModelDefinition{
-		Name:           "gpt-4o",
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-4o",
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	models["gpt-4o-mini"] = a.DefineModel(g, ModelDefinition{
-		Name:           "gpt-4o-mini",
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-4o-mini",
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	// GPT-4 Turbo models
 	models["gpt-4-turbo"] = a.DefineModel(g, ModelDefinition{
-		Name:           "gpt-4-turbo",
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-4-turbo",
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	// GPT-4 models
@@ -742,6 +1175,28 @@ func DefineCommonEmbedders(a *AzureAIFoundry, g *genkit.Genkit) map[string]ai.Em
 
 	return embedders
 }
+
+// Common model names for image generation
+const (
+	ModelDallE2       = "dall-e-2"
+	ModelDallE3       = "dall-e-3"
+	ModelGPTImageBeta = "gpt-image-1"
+)
+
+// Common model names for text-to-speech
+const (
+	ModelTTS1         = "tts-1"
+	ModelTTS1HD       = "tts-1-hd"
+	ModelGPT4oMiniTTS = "gpt-4o-mini-tts"
+)
+
+// Common model names for speech-to-text
+const (
+	ModelWhisper1               = "whisper-1"
+	ModelGPT4oMiniTranscribe    = "gpt-4o-mini-transcribe"
+	ModelGPT4oTranscribe        = "gpt-4o-transcribe"
+	ModelGPT4oTranscribeDiarize = "gpt-4o-transcribe-diarize"
+)
 
 // Model returns the Model with the given name.
 func Model(g *genkit.Genkit, name string) ai.Model {

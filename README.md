@@ -31,6 +31,9 @@ A comprehensive Azure AI Foundry plugin for Genkit Go that provides text generat
 		- [📡 Streaming](#-streaming)
 		- [💬 Multi-turn Conversations](#-multi-turn-conversations)
 		- [🔢 Embeddings](#-embeddings)
+		- [🎨 Image Generation](#-image-generation)
+		- [🗣️ Text-to-Speech](#️-text-to-speech)
+		- [🎙️ Speech-to-Text](#️-speech-to-text)
 	- [Troubleshooting](#troubleshooting)
 		- [Common Issues](#common-issues)
 	- [Contributing](#contributing)
@@ -43,6 +46,9 @@ A comprehensive Azure AI Foundry plugin for Genkit Go that provides text generat
 
 - **Text Generation**: Support for GPT-5, GPT-5 mini, GPT-4o, GPT-4o mini, GPT-4 Turbo, GPT-4, and GPT-3.5 Turbo models
 - **Embeddings**: Support for text-embedding-ada-002, text-embedding-3-small, and text-embedding-3-large models
+- **Image Generation**: Support for creating images from text prompts
+- **Text-to-Speech**: Convert text to natural-sounding speech with multiple voices
+- **Speech-to-Text**: Transcribe audio to text using with subtitle support
 - **Streaming**: Full streaming support for real-time responses
 - **Tool Calling**: Complete function calling capabilities for GPT-4 and GPT-3.5-turbo models
 - **Multimodal Support**: Support for text + image inputs (vision models like GPT-5, GPT-4o and GPT-4 Turbo)
@@ -147,9 +153,9 @@ func main() {
 
 	// Define a GPT-5 model (use your deployment name)
 	gpt5Model := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
-		Name:           "gpt-5", // Your deployment name in Azure
-		Type:           "chat",
-		SupportsVision: true,
+		Name:          "gpt-5", // Your deployment name in Azure
+		Type:          "chat",
+		SupportsMedia: true,
 	}, nil)
 
 	// Generate text
@@ -393,6 +399,9 @@ The repository includes comprehensive examples:
 - **`examples/embeddings/`** - Text embeddings generation
 - **`examples/tool_calling/`** - Function calling with multiple tools
 - **`examples/vision/`** - Multimodal image analysis
+- **`examples/image_generation/`** - Generate images
+- **`examples/text_to_speech/`** - Convert text to speech
+- **`examples/speech_to_text/`** - Transcribe audio to text
 
 ### Running Examples
 
@@ -419,6 +428,18 @@ go run main.go
 
 # Run vision example
 cd ../vision
+go run main.go
+
+# Run image generation example
+cd ../image_generation
+go run main.go
+
+# Run text-to-speech example
+cd ../text_to_speech
+go run main.go
+
+# Run speech-to-text example (requires audio files)
+cd ../speech_to_text
 go run main.go
 ```
 
@@ -530,6 +551,104 @@ if err != nil {
 // Access the embedding vector
 embedding := response.Embeddings[0].Embedding // []float32
 log.Printf("Embedding dimensions: %d", len(embedding))
+```
+
+### 🎨 Image Generation
+
+Generate images with DALL-E models using the standard `genkit.Generate()` method:
+
+```go
+// Define DALL-E model
+dallE3 := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
+	Name: azureaifoundry.ModelDallE3,
+	Type: "chat",
+}, nil)
+
+// Generate image
+response, err := genkit.Generate(ctx, g,
+	ai.WithModel(dallE3),
+	ai.WithPrompt("A serene landscape with mountains at sunset"),
+	ai.WithConfig(map[string]interface{}{
+		"quality": "hd",
+		"size":    "1024x1024",
+		"style":   "vivid",
+	}),
+)
+
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Printf("Image URL: %s", response.Text())
+```
+
+### 🗣️ Text-to-Speech
+
+Convert text to speech using the standard `genkit.Generate()` method:
+
+```go
+import "encoding/base64"
+
+// Define TTS model
+ttsModel := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
+	Name: azureaifoundry.ModelTTS1HD,
+	Type: "chat",
+}, nil)
+
+// Generate speech
+response, err := genkit.Generate(ctx, g,
+	ai.WithModel(ttsModel),
+	ai.WithPrompt("Hello! Welcome to Azure AI Foundry."),
+	ai.WithConfig(map[string]interface{}{
+		"voice":           "nova",
+		"response_format": "mp3",
+		"speed":           1.5,
+	}),
+)
+
+if err != nil {
+	log.Fatal(err)
+}
+
+// Decode base64 audio and save file
+audioData, _ := base64.StdEncoding.DecodeString(response.Text())
+os.WriteFile("output.mp3", audioData, 0644)
+```
+
+### 🎙️ Speech-to-Text
+
+Transcribe audio to text using the standard `genkit.Generate()` method:
+
+```go
+import "encoding/base64"
+
+// Define Whisper model with media support (required for audio input)
+whisperModel := azurePlugin.DefineModel(g, azureaifoundry.ModelDefinition{
+	Name:          azureaifoundry.ModelWhisper1,
+	Type:          "chat",
+	SupportsMedia: true, // Required for media parts (audio)
+}, nil)
+
+// Read and encode audio file
+audioData, _ := os.ReadFile("audio.mp3")
+base64Audio := base64.StdEncoding.EncodeToString(audioData)
+
+// Transcribe audio
+response, err := genkit.Generate(ctx, g,
+	ai.WithModel(whisperModel),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewMediaPart("audio/mp3", "data:audio/mp3;base64,"+base64Audio),
+	)),
+	ai.WithConfig(map[string]interface{}{
+		"language": "en",
+	}),
+)
+
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Printf("Transcription: %s", response.Text())
 ```
 
 ## Troubleshooting

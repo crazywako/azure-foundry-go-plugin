@@ -54,5 +54,10 @@ examples/tool_calling/tool_calling
 examples/embeddings/embeddings
 examples/streaming/streaming
 examples/vision/vision
+examples/image_generation/image_generation
+examples/text_to_speech/text_to_speech
+examples/text_to_speech/output_*.mp3
+examples/text_to_speech/output_*.opus
+examples/speech_to_text/speech_to_text
 .genkit/
 node_modules/
