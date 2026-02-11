@@ -24,7 +24,7 @@ import (
 	"math"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/xavidop/genkit-azure-foundry-go/examples/common"
+	"github.com/crazywako/azure-foundry-go-plugin/examples/common"
 )
 
 // cosineSimilarity calculates the cosine similarity between two vectors

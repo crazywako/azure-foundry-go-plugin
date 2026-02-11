@@ -73,7 +73,7 @@ All GPT-5, GPT-4 and GPT-3.5-turbo models support function calling (tools).
 ## Installation
 
 ```bash
-go get github.com/xavidop/genkit-azure-foundry-go
+go get github.com/crazywako/azure-foundry-go-plugin
 ```
 
 ## Quick Start
@@ -90,7 +90,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 func main() {
@@ -136,7 +136,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 func main() {
@@ -222,7 +222,7 @@ export AZURE_OPENAI_API_KEY="your-api-key"
 ```go
 import (
 	"os"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 azurePlugin := &azureaifoundry.AzureAIFoundry{
@@ -257,7 +257,7 @@ import (
 	"fmt"
 	"os"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 func main() {
@@ -293,7 +293,7 @@ When deployed to Azure, Managed Identity provides authentication without storing
 import (
 	"os"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 func main() {
@@ -327,7 +327,7 @@ export AZURE_CLIENT_SECRET="your-client-secret"
 import (
 	"os"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 func main() {
@@ -363,7 +363,7 @@ export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
 import (
 	"os"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 func main() {
@@ -529,7 +529,7 @@ response2, _ := genkit.Generate(ctx, g,
 ```go
 import (
 	"github.com/firebase/genkit/go/ai"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 // Define an embedder (use your deployment name)

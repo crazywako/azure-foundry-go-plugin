@@ -23,7 +23,7 @@ import (
 	"os"
 
 	"github.com/firebase/genkit/go/genkit"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
 )
 
 // Config holds Azure AI Foundry configuration

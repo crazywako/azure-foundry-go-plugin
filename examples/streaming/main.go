@@ -24,8 +24,8 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	azureaifoundry "github.com/xavidop/genkit-azure-foundry-go"
-	"github.com/xavidop/genkit-azure-foundry-go/examples/common"
+	azureaifoundry "github.com/crazywako/azure-foundry-go-plugin"
+	"github.com/crazywako/azure-foundry-go-plugin/examples/common"
 )
 
 func main() {

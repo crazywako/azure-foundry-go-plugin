@@ -141,7 +141,7 @@ release:
     ### Installation
     
     ```bash
-    go get github.com/xavidop/genkit-azure-foundry-go@{{.Tag}}
+    go get github.com/crazywako/azure-foundry-go-plugin@{{.Tag}}
     ```
     
     ### What's Changed
