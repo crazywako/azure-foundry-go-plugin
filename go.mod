@@ -1,4 +1,4 @@
-module github.com/xavidop/genkit-azure-foundry-go
+module github.com/crazywako/azure-foundry-go-plugin
 
 go 1.24.1
 
@@ -7,6 +7,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
 	github.com/firebase/genkit/go v1.4.0
 	github.com/openai/openai-go/v3 v3.18.0
+	github.com/xavidop/genkit-azure-foundry-go v1.1.6
 )
 
 require (
